@@ -1,0 +1,18 @@
+# Environment files
+.env
+config.env
+
+# Failed blocks log
+failed_blocks.json
+
+# Binaries
+bitcoin-indexer
+cmd/indexer/indexer
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
