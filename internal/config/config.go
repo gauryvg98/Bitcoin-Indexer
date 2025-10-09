@@ -46,7 +46,7 @@ func LoadConfig() (*Config, error) {
 		// Indexer Settings
 		BlockPollInterval:   getDurationEnv("BLOCK_POLL_INTERVAL", "10s"),
 		MempoolPollInterval: getDurationEnv("MEMPOOL_POLL_INTERVAL", "5s"),
-		BackfillWorkers:     getIntEnv("BACKFILL_WORKERS", 20),
+		BackfillWorkers:     getIntEnv("BACKFILL_WORKERS", 10), // Reduced from 20 to 10 for better stability
 		MaxReorgDepth:       getIntEnv("MAX_REORG_DEPTH", 10),
 
 		// API Server

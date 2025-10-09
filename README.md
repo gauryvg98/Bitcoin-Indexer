@@ -112,7 +112,15 @@ go mod download
 # Create database
 createdb bitcoin_indexer
 
-# Schema will be auto-created on first run
+# Choose setup method:
+# Option A: Fresh installation (recommended for new setups)
+./setup_comprehensive.sh
+
+# Option B: Check current schema status
+./check_schema_diff.sh
+
+# Option C: Migrate existing database (preserves data)
+./migrate_to_bulk_operations.sh
 ```
 
 4. **Configure environment**

@@ -1,0 +1,7 @@
+2025/10/09 23:12:10 📦 RPC Worker 3: Prepared block 279671 (217 txs, 725 new UTXOs, 515 spent UTXOs) in 24.500469208s
+2025/10/09 23:12:10 ✅ DB Worker 6: Processed block 278661 (121 txs, 247 new UTXOs, 160 spent UTXOs) in 14.082675625s
+2025/10/09 23:12:10 ✅ DB Worker 9: Processed block 278654 (187 txs, 991 new UTXOs, 158 spent UTXOs) in 26.9049005s
+2025/10/09 23:12:10 📦 RPC Worker 9: Prepared block 279674 (513 txs, 1445 new UTXOs, 162 spent UTXOs) in 22.788900917s
+2025/10/09 23:12:10 ✅ DB Worker 2: Processed block 278650 (249 txs, 929 new UTXOs, 244 spent UTXOs) in 25.789773333s
+2025/10/09 23:12:10 📦 RPC Worker 1: Prepared block 279676 (232 txs, 481 new UTXOs, 80 spent UTXOs) in 18.442589416s
+2025/10/09 23:12:11 ✅ DB Worker 4: Processed block 278656 (337 txs, 847 new UTXOs, 192 spent UTXOs) in 24.945933833s

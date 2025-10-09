@@ -43,13 +43,28 @@ func NewRPCClient(baseURL, username, password string) *RPCClient {
 		password: password,
 		httpClient: &http.Client{
 			Transport: tr,
-			Timeout:   30 * time.Second,
+			Timeout:   120 * time.Second, // Increased from 30s to 120s for large blocks
 		},
 		// Default retry configuration
 		maxRetries: 5,
 		baseDelay:  100 * time.Millisecond,
-		maxDelay:   30 * time.Second,
+		maxDelay:   60 * time.Second, // Increased from 30s to 60s
 	}
+}
+
+// BaseURL returns the base URL of the RPC client
+func (c *RPCClient) BaseURL() string {
+	return c.baseURL
+}
+
+// Username returns the username of the RPC client
+func (c *RPCClient) Username() string {
+	return c.username
+}
+
+// Password returns the password of the RPC client
+func (c *RPCClient) Password() string {
+	return c.password
 }
 
 // RPCRequest represents a JSON-RPC request

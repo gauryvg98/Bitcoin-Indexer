@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -26,6 +27,32 @@ func (p *Parser) ParseBlock(block *bitcoin.Block) ([]*models.UTXO, []*models.UTX
 	var spentUTXOs []*models.UTXO
 	var txReferences []*models.TransactionReference
 
+	// STEP 1: Collect all UTXO references needed for inputs (bulk lookup)
+	var utxoRefs []database.UTXORef
+	utxoRefMap := make(map[string]int) // key -> index in refs array
+
+	for _, tx := range block.Transactions {
+		for _, vin := range tx.Vin {
+			if vin.Txid != "" && vin.Vout >= 0 {
+				key := fmt.Sprintf("%s:%d", vin.Txid, vin.Vout)
+				if _, exists := utxoRefMap[key]; !exists {
+					utxoRefMap[key] = len(utxoRefs)
+					utxoRefs = append(utxoRefs, database.UTXORef{
+						Txid: vin.Txid,
+						Vout: vin.Vout,
+					})
+				}
+			}
+		}
+	}
+
+	// STEP 2: Bulk fetch all needed UTXOs in ONE query
+	existingUTXOs, err := p.db.BatchGetUTXOs(utxoRefs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to batch get UTXOs: %w", err)
+	}
+
+	// STEP 3: Process transactions with pre-fetched UTXOs
 	for _, tx := range block.Transactions {
 		// Parse outputs (ALL new UTXOs, not just watched ones)
 		for _, vout := range tx.Vout {
@@ -54,7 +81,7 @@ func (p *Parser) ParseBlock(block *bitcoin.Block) ([]*models.UTXO, []*models.UTX
 
 			if isWatched {
 				// Compute sender address for incoming transaction
-				senderAddress := p.computeSenderAddress(&tx, block.Height)
+				senderAddress := p.computeSenderAddressFromUTXOs(&tx, existingUTXOs)
 
 				blockTimestamp := int(block.Time)
 				txRef := &models.TransactionReference{
@@ -71,17 +98,13 @@ func (p *Parser) ParseBlock(block *bitcoin.Block) ([]*models.UTXO, []*models.UTX
 			}
 		}
 
-		// Parse inputs (ALL spent UTXOs)
+		// Parse inputs (ALL spent UTXOs) - use pre-fetched data
 		for _, vin := range tx.Vin {
 			if vin.Txid != "" && vin.Vout >= 0 { // Skip coinbase inputs
-				// Get the spent UTXO to mark it as spent
-				existingUTXO, err := p.db.GetUTXO(vin.Txid, vin.Vout)
-				if err != nil {
-					// UTXO not found in our database, skip
-					continue
-				}
+				key := fmt.Sprintf("%s:%d", vin.Txid, vin.Vout)
+				existingUTXO, found := existingUTXOs[key]
 
-				if existingUTXO != nil {
+				if found && existingUTXO != nil {
 					// Mark as spent
 					spentUTXO := *existingUTXO
 					spentUTXO.Status = "spent"
@@ -127,6 +150,32 @@ func (p *Parser) ParseBlockWithCache(block *bitcoin.Block, watchedScriptMap map[
 	var spentUTXOs []*models.UTXO
 	var txReferences []*models.TransactionReference
 
+	// STEP 1: Collect all UTXO references needed for inputs (bulk lookup)
+	var utxoRefs []database.UTXORef
+	utxoRefMap := make(map[string]int) // key -> index in refs array
+
+	for _, tx := range block.Transactions {
+		for _, vin := range tx.Vin {
+			if vin.Txid != "" && vin.Vout >= 0 {
+				key := fmt.Sprintf("%s:%d", vin.Txid, vin.Vout)
+				if _, exists := utxoRefMap[key]; !exists {
+					utxoRefMap[key] = len(utxoRefs)
+					utxoRefs = append(utxoRefs, database.UTXORef{
+						Txid: vin.Txid,
+						Vout: vin.Vout,
+					})
+				}
+			}
+		}
+	}
+
+	// STEP 2: Bulk fetch all needed UTXOs in ONE query
+	existingUTXOs, err := p.db.BatchGetUTXOs(utxoRefs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to batch get UTXOs: %w", err)
+	}
+
+	// STEP 3: Process transactions with pre-fetched UTXOs
 	for _, tx := range block.Transactions {
 		// Parse outputs (ALL new UTXOs, not just watched ones)
 		for _, vout := range tx.Vout {
@@ -150,7 +199,7 @@ func (p *Parser) ParseBlockWithCache(block *bitcoin.Block, watchedScriptMap map[
 			// Check if this output is for a watched address using cache
 			if _, isWatched := watchedScriptMap[vout.ScriptPubKey.Hex]; isWatched {
 				// Compute sender address for incoming transaction
-				senderAddress := p.computeSenderAddress(&tx, block.Height)
+				senderAddress := p.computeSenderAddressFromUTXOs(&tx, existingUTXOs)
 
 				blockTimestamp := int(block.Time)
 				txRef := &models.TransactionReference{
@@ -167,17 +216,13 @@ func (p *Parser) ParseBlockWithCache(block *bitcoin.Block, watchedScriptMap map[
 			}
 		}
 
-		// Parse inputs (ALL spent UTXOs)
+		// Parse inputs (ALL spent UTXOs) - use pre-fetched data
 		for _, vin := range tx.Vin {
 			if vin.Txid != "" && vin.Vout >= 0 { // Skip coinbase inputs
-				// Get the spent UTXO to mark it as spent
-				existingUTXO, err := p.db.GetUTXO(vin.Txid, vin.Vout)
-				if err != nil {
-					// UTXO not found in our database, skip
-					continue
-				}
+				key := fmt.Sprintf("%s:%d", vin.Txid, vin.Vout)
+				existingUTXO, found := existingUTXOs[key]
 
-				if existingUTXO != nil {
+				if found && existingUTXO != nil {
 					// Mark as spent
 					spentUTXO := *existingUTXO
 					spentUTXO.Status = "spent"
@@ -218,7 +263,24 @@ func (p *Parser) ParseMempoolTransaction(tx *bitcoin.Tx) ([]*models.UTXO, []*mod
 	var spentUTXOs []*models.UTXO
 	var txReferences []*models.TransactionReference
 
-	// Parse outputs (ALL new UTXOs, not just watched ones)
+	// STEP 1: Collect all UTXO references needed for inputs (bulk lookup)
+	var utxoRefs []database.UTXORef
+	for _, vin := range tx.Vin {
+		if vin.Txid != "" && vin.Vout >= 0 {
+			utxoRefs = append(utxoRefs, database.UTXORef{
+				Txid: vin.Txid,
+				Vout: vin.Vout,
+			})
+		}
+	}
+
+	// STEP 2: Bulk fetch all needed UTXOs in ONE query
+	existingUTXOs, err := p.db.BatchGetUTXOs(utxoRefs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to batch get UTXOs: %w", err)
+	}
+
+	// STEP 3: Parse outputs (ALL new UTXOs, not just watched ones)
 	for _, vout := range tx.Vout {
 		// Extract address with priority: address field > addresses[0] > derived identifier
 		address := ExtractAddressFromScriptPubKey(vout.ScriptPubKey)
@@ -242,8 +304,8 @@ func (p *Parser) ParseMempoolTransaction(tx *bitcoin.Tx) ([]*models.UTXO, []*mod
 		}
 
 		if isWatched {
-			// Compute sender address for incoming transaction
-			senderAddress := p.computeSenderAddress(tx, 0) // 0 for mempool
+			// Compute sender address for incoming transaction using pre-fetched UTXOs
+			senderAddress := p.computeSenderAddressFromUTXOs(tx, existingUTXOs)
 
 			txRef := &models.TransactionReference{
 				Txid:          tx.Txid,
@@ -257,17 +319,13 @@ func (p *Parser) ParseMempoolTransaction(tx *bitcoin.Tx) ([]*models.UTXO, []*mod
 		}
 	}
 
-	// Parse inputs (ALL spent UTXOs)
+	// STEP 4: Parse inputs (ALL spent UTXOs) - use pre-fetched data
 	for _, vin := range tx.Vin {
 		if vin.Txid != "" && vin.Vout >= 0 { // Skip coinbase inputs
-			// Get the spent UTXO to mark it as spent
-			existingUTXO, err := p.db.GetUTXO(vin.Txid, vin.Vout)
-			if err != nil {
-				// UTXO not found in our database, skip
-				continue
-			}
+			key := fmt.Sprintf("%s:%d", vin.Txid, vin.Vout)
+			existingUTXO, found := existingUTXOs[key]
 
-			if existingUTXO != nil {
+			if found && existingUTXO != nil {
 				// Mark as spent
 				spentUTXO := *existingUTXO
 				spentUTXO.Status = "spent"
@@ -338,6 +396,20 @@ func (p *Parser) computeSenderAddress(tx *bitcoin.Tx, blockHeight int) *string {
 			// Get the previous UTXO to find the sender address
 			prevUTXO, err := p.db.GetUTXO(vin.Txid, vin.Vout)
 			if err == nil && prevUTXO != nil {
+				return &prevUTXO.Address
+			}
+		}
+	}
+	return nil
+}
+
+// computeSenderAddressFromUTXOs computes sender address from pre-fetched UTXOs map
+func (p *Parser) computeSenderAddressFromUTXOs(tx *bitcoin.Tx, utxoMap map[string]*models.UTXO) *string {
+	// For simplicity, we'll use the first input's previous output address as sender
+	for _, vin := range tx.Vin {
+		if vin.Txid != "" && vin.Vout >= 0 {
+			key := fmt.Sprintf("%s:%d", vin.Txid, vin.Vout)
+			if prevUTXO, found := utxoMap[key]; found && prevUTXO != nil {
 				return &prevUTXO.Address
 			}
 		}
@@ -528,6 +600,70 @@ func (p *Parser) ProcessTransactionsBatch(transactions []*bitcoin.Tx, blockHeigh
 
 	// Store all data in a single batch operation
 	return p.db.BatchStoreTransactions(txModels, allInputs, allOutputs)
+}
+
+// ProcessTransactionsBatchInTx processes multiple transactions within an existing transaction
+func (p *Parser) ProcessTransactionsBatchInTx(tx *sql.Tx, transactions []*bitcoin.Tx, blockHeight *int, blockHash *string, blockTime *int64) error {
+	if len(transactions) == 0 {
+		return nil
+	}
+
+	var txModels []*models.Transaction
+	var allInputs []*models.TransactionInput
+	var allOutputs []*models.TransactionOutput
+
+	// Prepare all transaction data
+	for _, tx := range transactions {
+		// Create transaction model
+		transaction := &models.Transaction{
+			Txid:        tx.Txid,
+			BlockHeight: blockHeight,
+			BlockHash:   blockHash,
+			BlockTime:   p.convertBlockTime(blockTime),
+			Size:        &tx.Size,
+			Weight:      &tx.Weight,
+			FeeSats:     p.calculateFee(tx),
+			IsCoinbase:  p.isCoinbase(tx),
+			CreatedAt:   time.Now(),
+		}
+		txModels = append(txModels, transaction)
+
+		// Prepare inputs
+		for i, vin := range tx.Vin {
+			input := &models.TransactionInput{
+				Txid:      tx.Txid,
+				Vout:      i,
+				PrevTxid:  vin.Txid,
+				PrevVout:  vin.Vout,
+				ScriptSig: &vin.ScriptSig.Hex,
+				Sequence:  &vin.Sequence,
+				Witness:   vin.Txinwitness,
+			}
+			allInputs = append(allInputs, input)
+		}
+
+		// Prepare outputs
+		for _, vout := range tx.Vout {
+			// Extract address with priority: address field > addresses[0] > derived identifier
+			address := ExtractAddressFromScriptPubKey(vout.ScriptPubKey)
+
+			scriptType, _ := GetScriptType(vout.ScriptPubKey.Hex)
+
+			output := &models.TransactionOutput{
+				Txid:       tx.Txid,
+				Vout:       vout.N,
+				Address:    address,
+				ValueSats:  int64(vout.Value * 100000000),
+				ScriptType: &scriptType,
+				ScriptHex:  &vout.ScriptPubKey.Hex,
+				ScriptAsm:  &vout.ScriptPubKey.Asm,
+			}
+			allOutputs = append(allOutputs, output)
+		}
+	}
+
+	// Store all data within the existing transaction
+	return p.db.BatchStoreTransactionsInTx(tx, txModels, allInputs, allOutputs)
 }
 
 // convertBlockTime converts block timestamp to time.Time

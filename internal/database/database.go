@@ -3,13 +3,78 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log"
+	"math/rand"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"bitcoin-indexer/internal/models"
 
 	"github.com/lib/pq"
-	_ "github.com/lib/pq"
 )
+
+// isRetryableDBError checks if a database error is retryable
+func isRetryableDBError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for PostgreSQL connection errors and deadlocks
+	errStr := err.Error()
+	return strings.Contains(errStr, "too many clients already") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "connection timeout") ||
+		strings.Contains(errStr, "server closed the connection") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "deadlock detected") ||
+		strings.Contains(errStr, "serialization failure")
+}
+
+// executeWithRetry executes a database operation with retry logic
+func executeWithRetry(operation func() error, maxRetries int) error {
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		err := operation()
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+
+		// If not retryable or this is the last attempt, return the error
+		if !isRetryableDBError(err) || attempt == maxRetries {
+			return err
+		}
+
+		// Calculate exponential backoff delay with jitter for deadlocks
+		baseDelay := time.Duration(1<<uint(attempt)) * time.Millisecond * 100 // Start with 100ms
+		if baseDelay > 5*time.Second {
+			baseDelay = 5 * time.Second
+		}
+
+		// Add jitter to prevent thundering herd
+		jitter := time.Duration(rand.Intn(100)) * time.Millisecond
+		delay := baseDelay + jitter
+
+		// Log retry attempt with more detail for deadlocks
+		if strings.Contains(err.Error(), "deadlock") {
+			fmt.Printf("Deadlock detected (attempt %d/%d): %v. Retrying in %v with jitter...\n",
+				attempt+1, maxRetries+1, err, delay)
+		} else {
+			fmt.Printf("Database operation failed (attempt %d/%d): %v. Retrying in %v...\n",
+				attempt+1, maxRetries+1, err, delay)
+		}
+
+		time.Sleep(delay)
+	}
+
+	return lastErr
+}
 
 // DB wraps the database connection and provides methods for data access
 type DB struct {
@@ -28,10 +93,16 @@ func NewDB(databaseURL string) (*DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Configure connection pool
-	conn.SetMaxOpenConns(50)                 // Maximum number of open connections
-	conn.SetMaxIdleConns(25)                 // Maximum number of idle connections
-	conn.SetConnMaxLifetime(5 * time.Minute) // Connection lifetime
+	// Dynamic connection pool sizing based on environment
+	maxOpenConns := getIntEnv("DB_MAX_OPEN_CONNS", 500)               // Increased for 250 workers
+	maxIdleConns := getIntEnv("DB_MAX_IDLE_CONNS", 250)               // Increased proportionally
+	connMaxLifetime := getDurationEnv("DB_CONN_MAX_LIFETIME", "30m")  // Increased
+	connMaxIdleTime := getDurationEnv("DB_CONN_MAX_IDLE_TIME", "15m") // Increased
+
+	conn.SetMaxOpenConns(maxOpenConns)
+	conn.SetMaxIdleConns(maxIdleConns)
+	conn.SetConnMaxLifetime(connMaxLifetime)
+	conn.SetConnMaxIdleTime(connMaxIdleTime)
 
 	if err := conn.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
@@ -40,8 +111,8 @@ func NewDB(databaseURL string) (*DB, error) {
 	db := &DB{
 		conn:         conn,
 		stmtCache:    make(map[string]*sql.Stmt),
-		maxOpenConns: 250,
-		maxIdleConns: 100,
+		maxOpenConns: maxOpenConns,
+		maxIdleConns: maxIdleConns,
 	}
 
 	// Initialize schema
@@ -55,6 +126,35 @@ func NewDB(databaseURL string) (*DB, error) {
 	}
 
 	return db, nil
+}
+
+// Conn returns the underlying database connection for transaction management
+func (db *DB) Conn() *sql.DB {
+	return db.conn
+}
+
+// Add helper functions for environment variables
+func getIntEnv(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
+	}
+	return defaultValue
+}
+
+func getDurationEnv(key, defaultValue string) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if duration, err := time.ParseDuration(value); err == nil {
+			return duration
+		}
+	}
+
+	duration, err := time.ParseDuration(defaultValue)
+	if err != nil {
+		panic(fmt.Sprintf("invalid default duration %s: %v", defaultValue, err))
+	}
+	return duration
 }
 
 // InitSchema creates the database schema
@@ -129,14 +229,17 @@ func (db *DB) InitSchema() error {
 	);
 
 	-- Indexes (performance)
+	-- Note: PRIMARY KEY (txid, vout) already creates an index, so idx_utxo_txid_vout is redundant
 	CREATE INDEX IF NOT EXISTS idx_utxo_address        ON utxo (address);
-	CREATE INDEX IF NOT EXISTS idx_utxo_status         ON utxo (status);
 	CREATE INDEX IF NOT EXISTS idx_utxo_blockhash      ON utxo (block_hash);
-	CREATE INDEX IF NOT EXISTS idx_utxo_txid_vout      ON utxo (txid, vout);
 	CREATE INDEX IF NOT EXISTS idx_utxo_block_height   ON utxo (block_height);
-	CREATE INDEX IF NOT EXISTS idx_utxo_first_seen     ON utxo (first_seen_at);
-	CREATE INDEX IF NOT EXISTS idx_utxo_spent_at       ON utxo (spent_at);
-	CREATE INDEX IF NOT EXISTS idx_utxo_composite      ON utxo (address, status, block_height);
+	
+	-- Partial indexes for better performance on status filtering
+	CREATE INDEX IF NOT EXISTS idx_utxo_status_confirmed ON utxo (txid, vout) WHERE status = 'confirmed';
+	CREATE INDEX IF NOT EXISTS idx_utxo_status_unspent  ON utxo (address, value_sats) WHERE status IN ('confirmed', 'mempool');
+	
+	-- Composite indexes for common query patterns
+	CREATE INDEX IF NOT EXISTS idx_utxo_address_status  ON utxo (address, status, block_height);
 	
 	CREATE INDEX IF NOT EXISTS idx_webhook_outbox_sched ON webhook_outbox (status, next_attempt_at);
 	CREATE INDEX IF NOT EXISTS idx_webhook_outbox_addr  ON webhook_outbox (address);
@@ -205,7 +308,7 @@ func (db *DB) prepareStatements() error {
 		"get_utxo": `
 			SELECT txid, vout, address, script_hex, value_sats, status, block_height, block_hash, first_seen_at, spent_at, spent_by_txid
 			FROM utxo 
-			WHERE txid = $1 AND vout = $2
+			WHERE txid = $1 AND vout = $2 AND status IN ('confirmed', 'mempool')
 		`,
 		"is_script_watched": `
 			SELECT id, address, script_hex, type, target_id FROM watched_script WHERE script_hex = $1
@@ -464,6 +567,76 @@ func (db *DB) GetUTXO(txid string, vout int) (*models.UTXO, error) {
 	return utxo, nil
 }
 
+// UTXORef represents a reference to a UTXO (txid + vout)
+type UTXORef struct {
+	Txid string
+	Vout int
+}
+
+// BatchGetUTXOs retrieves multiple UTXOs in a single query
+func (db *DB) BatchGetUTXOs(refs []UTXORef) (map[string]*models.UTXO, error) {
+	if len(refs) == 0 {
+		return make(map[string]*models.UTXO), nil
+	}
+
+	// Build arrays for the query
+	txids := make([]string, len(refs))
+	vouts := make([]int, len(refs))
+
+	for i, ref := range refs {
+		txids[i] = ref.Txid
+		vouts[i] = ref.Vout
+	}
+
+	// Use UNNEST to query multiple UTXOs efficiently
+	query := `
+		SELECT txid, vout, address, script_hex, value_sats, status, 
+		       block_height, block_hash, first_seen_at, spent_at, spent_by_txid
+		FROM utxo
+		WHERE (txid, vout) IN (
+			SELECT UNNEST($1::text[]), UNNEST($2::int[])
+		)
+		AND status IN ('confirmed', 'mempool')
+	`
+
+	rows, err := db.conn.Query(query, pq.Array(txids), pq.Array(vouts))
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch get UTXOs: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]*models.UTXO)
+	found := 0
+	for rows.Next() {
+		utxo := &models.UTXO{}
+		err := rows.Scan(
+			&utxo.Txid,
+			&utxo.Vout,
+			&utxo.Address,
+			&utxo.ScriptHex,
+			&utxo.ValueSats,
+			&utxo.Status,
+			&utxo.BlockHeight,
+			&utxo.BlockHash,
+			&utxo.FirstSeenAt,
+			&utxo.SpentAt,
+			&utxo.SpentByTxid,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan UTXO: %w", err)
+		}
+
+		// Use txid:vout as key for fast lookup
+		key := fmt.Sprintf("%s:%d", utxo.Txid, utxo.Vout)
+		result[key] = utxo
+		found++
+	}
+
+	// Bulk UTXO query completed (metrics collected internally)
+
+	return result, rows.Err()
+}
+
 // GetUTXOsForAddress returns UTXOs for a specific address
 func (db *DB) GetUTXOsForAddress(address string) ([]*models.UTXO, error) {
 	query := `
@@ -554,6 +727,22 @@ func (db *DB) UpdateIndexProgress(height int, blockHash string) error {
 	`
 
 	_, err := db.conn.Exec(query, height, blockHash, time.Now())
+	return err
+}
+
+// UpdateIndexProgressInTx updates the indexing progress within a transaction
+func (db *DB) UpdateIndexProgressInTx(tx *sql.Tx, height int, blockHash string) error {
+	query := `
+		INSERT INTO index_progress (id, last_height, last_block_hash, updated_at)
+		VALUES (true, $1, $2, $3)
+		ON CONFLICT (id) 
+		DO UPDATE SET 
+			last_height = EXCLUDED.last_height,
+			last_block_hash = EXCLUDED.last_block_hash,
+			updated_at = EXCLUDED.updated_at
+	`
+
+	_, err := tx.Exec(query, height, blockHash, time.Now())
 	return err
 }
 
@@ -730,6 +919,12 @@ func (db *DB) StoreTransactionInput(input *models.TransactionInput) error {
 			witness = EXCLUDED.witness
 	`
 
+	// Handle witness field - convert nil to empty array for PostgreSQL
+	witness := input.Witness
+	if witness == nil {
+		witness = []string{}
+	}
+
 	_, err := db.conn.Exec(
 		query,
 		input.Txid,
@@ -738,7 +933,7 @@ func (db *DB) StoreTransactionInput(input *models.TransactionInput) error {
 		input.PrevVout,
 		input.ScriptSig,
 		input.Sequence,
-		pq.Array(input.Witness),
+		pq.Array(witness),
 	)
 
 	return err
@@ -966,64 +1161,96 @@ type SenderInfo struct {
 
 // Batch Processing Methods for Performance Optimization
 
-// BatchUpsertUTXOs processes multiple UTXOs in a single transaction
+// sortUTXOsByTxidVout sorts UTXOs by (txid, vout) to ensure consistent lock ordering and prevent deadlocks
+func sortUTXOsByTxidVout(utxos []*models.UTXO) {
+	sort.Slice(utxos, func(i, j int) bool {
+		if utxos[i].Txid != utxos[j].Txid {
+			return utxos[i].Txid < utxos[j].Txid
+		}
+		return utxos[i].Vout < utxos[j].Vout
+	})
+}
+
+// BatchUpsertUTXOs processes multiple UTXOs in a single transaction with deadlock prevention
 func (db *DB) BatchUpsertUTXOs(utxos []*models.UTXO) error {
 	if len(utxos) == 0 {
 		return nil
 	}
 
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
+	// Sort UTXOs by (txid, vout) to ensure consistent lock ordering and prevent deadlocks
+	sortedUTXOs := make([]*models.UTXO, len(utxos))
+	copy(sortedUTXOs, utxos)
+	sortUTXOsByTxidVout(sortedUTXOs)
 
-	stmt := tx.Stmt(db.stmtCache["upsert_utxo"])
-	defer stmt.Close()
-
-	for _, utxo := range utxos {
-		_, err := stmt.Exec(
-			utxo.Txid,
-			utxo.Vout,
-			utxo.Address,
-			utxo.ScriptHex,
-			utxo.ValueSats,
-			utxo.Status,
-			utxo.BlockHeight,
-			utxo.BlockHash,
-			utxo.FirstSeenAt,
-		)
+	return executeWithRetry(func() error {
+		tx, err := db.conn.Begin()
 		if err != nil {
-			return fmt.Errorf("failed to upsert UTXO %s:%d: %w", utxo.Txid, utxo.Vout, err)
+			return fmt.Errorf("failed to begin transaction: %w", err)
 		}
-	}
+		defer tx.Rollback()
 
-	return tx.Commit()
+		stmt := tx.Stmt(db.stmtCache["upsert_utxo"])
+		defer stmt.Close()
+
+		// Process UTXOs in sorted order to prevent deadlocks
+		for _, utxo := range sortedUTXOs {
+			_, err := stmt.Exec(
+				utxo.Txid,
+				utxo.Vout,
+				utxo.Address,
+				utxo.ScriptHex,
+				utxo.ValueSats,
+				utxo.Status,
+				utxo.BlockHeight,
+				utxo.BlockHash,
+				utxo.FirstSeenAt,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to upsert UTXO %s:%d: %w", utxo.Txid, utxo.Vout, err)
+			}
+		}
+
+		return tx.Commit()
+	}, 5) // Increased retries for deadlock scenarios
 }
 
-// BatchMarkUTXOsSpent marks multiple UTXOs as spent in a single transaction
+// BatchMarkUTXOsSpent marks multiple UTXOs as spent in a single transaction with deadlock prevention
 func (db *DB) BatchMarkUTXOsSpent(spentUTXOs []*models.UTXO) error {
 	if len(spentUTXOs) == 0 {
 		return nil
 	}
 
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
+	// Sort UTXOs by (txid, vout) to ensure consistent lock ordering and prevent deadlocks
+	sortedUTXOs := make([]*models.UTXO, len(spentUTXOs))
+	copy(sortedUTXOs, spentUTXOs)
+	sortUTXOsByTxidVout(sortedUTXOs)
 
-	stmt := tx.Stmt(db.stmtCache["mark_utxo_spent"])
-	defer stmt.Close()
-
-	for _, utxo := range spentUTXOs {
-		_, err := stmt.Exec(utxo.Txid, utxo.Vout, utxo.SpentAt, utxo.SpentByTxid)
+	return executeWithRetry(func() error {
+		tx, err := db.conn.Begin()
 		if err != nil {
-			return fmt.Errorf("failed to mark UTXO as spent %s:%d: %w", utxo.Txid, utxo.Vout, err)
+			return fmt.Errorf("failed to begin transaction: %w", err)
 		}
-	}
+		defer tx.Rollback()
 
-	return tx.Commit()
+		// Set transaction isolation level to prevent deadlocks
+		_, err = tx.Exec("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+		if err != nil {
+			return fmt.Errorf("failed to set transaction isolation level: %w", err)
+		}
+
+		stmt := tx.Stmt(db.stmtCache["mark_utxo_spent"])
+		defer stmt.Close()
+
+		// Process UTXOs in sorted order to prevent deadlocks
+		for _, utxo := range sortedUTXOs {
+			_, err := stmt.Exec(utxo.Txid, utxo.Vout, utxo.SpentAt, utxo.SpentByTxid)
+			if err != nil {
+				return fmt.Errorf("failed to mark UTXO as spent %s:%d: %w", utxo.Txid, utxo.Vout, err)
+			}
+		}
+
+		return tx.Commit()
+	}, 5) // Increased retries for deadlock scenarios
 }
 
 // BatchStoreTransactions stores multiple transactions with their inputs and outputs
@@ -1032,77 +1259,332 @@ func (db *DB) BatchStoreTransactions(transactions []*models.Transaction, inputs 
 		return nil
 	}
 
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Store transactions
-	txStmt := tx.Stmt(db.stmtCache["store_transaction"])
-	defer txStmt.Close()
-
-	for _, transaction := range transactions {
-		_, err := txStmt.Exec(
-			transaction.Txid,
-			transaction.BlockHeight,
-			transaction.BlockHash,
-			transaction.BlockTime,
-			transaction.Size,
-			transaction.Weight,
-			transaction.FeeSats,
-			transaction.IsCoinbase,
-			transaction.CreatedAt,
-			time.Now(),
-		)
+	return executeWithRetry(func() error {
+		tx, err := db.conn.Begin()
 		if err != nil {
-			return fmt.Errorf("failed to store transaction %s: %w", transaction.Txid, err)
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Set transaction isolation level to prevent deadlocks
+		_, err = tx.Exec("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+		if err != nil {
+			return fmt.Errorf("failed to set transaction isolation level: %w", err)
+		}
+
+		// Store transactions using bulk VALUES insert with batching
+		if len(transactions) > 0 {
+			// PostgreSQL has a limit of 65535 parameters, so we need to batch
+			// Each transaction uses 10 parameters, so max batch size is 6553 transactions
+			batchSize := 6000 // Conservative batch size
+
+			for i := 0; i < len(transactions); i += batchSize {
+				end := i + batchSize
+				if end > len(transactions) {
+					end = len(transactions)
+				}
+
+				batch := transactions[i:end]
+				query := `
+					INSERT INTO transaction (txid, block_height, block_hash, block_time, size, weight, fee_sats, is_coinbase, created_at, updated_at)
+					VALUES `
+
+				values := make([]string, len(batch))
+				args := make([]interface{}, 0, len(batch)*10)
+
+				for j, transaction := range batch {
+					values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+						j*10+1, j*10+2, j*10+3, j*10+4, j*10+5, j*10+6, j*10+7, j*10+8, j*10+9, j*10+10)
+
+					args = append(args,
+						transaction.Txid,
+						transaction.BlockHeight,
+						transaction.BlockHash,
+						transaction.BlockTime,
+						transaction.Size,
+						transaction.Weight,
+						transaction.FeeSats,
+						transaction.IsCoinbase,
+						transaction.CreatedAt,
+						time.Now(),
+					)
+				}
+
+				query += strings.Join(values, ", ")
+				query += ` ON CONFLICT (txid) DO UPDATE SET
+					block_height = EXCLUDED.block_height,
+					block_hash = EXCLUDED.block_hash,
+					block_time = EXCLUDED.block_time,
+					size = EXCLUDED.size,
+					weight = EXCLUDED.weight,
+					fee_sats = EXCLUDED.fee_sats,
+					is_coinbase = EXCLUDED.is_coinbase,
+					updated_at = EXCLUDED.updated_at`
+
+				_, err = tx.Exec(query, args...)
+				if err != nil {
+					return fmt.Errorf("failed to bulk store transactions batch %d-%d: %w", i, end, err)
+				}
+			}
+		}
+
+		// Store inputs using bulk VALUES insert with batching
+		if len(inputs) > 0 {
+			// Each input uses 7 parameters, so max batch size is 9360 inputs
+			batchSize := 8000 // Conservative batch size
+
+			for i := 0; i < len(inputs); i += batchSize {
+				end := i + batchSize
+				if end > len(inputs) {
+					end = len(inputs)
+				}
+
+				batch := inputs[i:end]
+				query := `
+					INSERT INTO transaction_input (txid, vout, prev_txid, prev_vout, script_sig, sequence, witness)
+					VALUES `
+
+				values := make([]string, len(batch))
+				args := make([]interface{}, 0, len(batch)*7)
+
+				for j, input := range batch {
+					values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+						j*7+1, j*7+2, j*7+3, j*7+4, j*7+5, j*7+6, j*7+7)
+
+					// Handle witness field - convert nil to empty array for PostgreSQL
+					witness := input.Witness
+					if witness == nil {
+						witness = []string{}
+					}
+
+					args = append(args,
+						input.Txid,
+						input.Vout,
+						input.PrevTxid,
+						input.PrevVout,
+						input.ScriptSig,
+						input.Sequence,
+						pq.Array(witness),
+					)
+				}
+
+				query += strings.Join(values, ", ")
+				query += ` ON CONFLICT (txid, vout) DO UPDATE SET
+					prev_txid = EXCLUDED.prev_txid,
+					prev_vout = EXCLUDED.prev_vout,
+					script_sig = EXCLUDED.script_sig,
+					sequence = EXCLUDED.sequence,
+					witness = EXCLUDED.witness`
+
+				_, err = tx.Exec(query, args...)
+				if err != nil {
+					return fmt.Errorf("failed to bulk store transaction inputs batch %d-%d: %w", i, end, err)
+				}
+			}
+		}
+
+		// Store outputs using bulk VALUES insert with batching
+		if len(outputs) > 0 {
+			// Each output uses 7 parameters, so max batch size is 9360 outputs
+			batchSize := 8000 // Conservative batch size
+
+			for i := 0; i < len(outputs); i += batchSize {
+				end := i + batchSize
+				if end > len(outputs) {
+					end = len(outputs)
+				}
+
+				batch := outputs[i:end]
+				query := `
+					INSERT INTO transaction_output (txid, vout, address, value_sats, script_type, script_hex, script_asm)
+					VALUES `
+
+				values := make([]string, len(batch))
+				args := make([]interface{}, 0, len(batch)*7)
+
+				for j, output := range batch {
+					values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+						j*7+1, j*7+2, j*7+3, j*7+4, j*7+5, j*7+6, j*7+7)
+
+					args = append(args,
+						output.Txid,
+						output.Vout,
+						output.Address,
+						output.ValueSats,
+						output.ScriptType,
+						output.ScriptHex,
+						output.ScriptAsm,
+					)
+				}
+
+				query += strings.Join(values, ", ")
+				query += ` ON CONFLICT (txid, vout) DO UPDATE SET
+					address = EXCLUDED.address,
+					value_sats = EXCLUDED.value_sats,
+					script_type = EXCLUDED.script_type,
+					script_hex = EXCLUDED.script_hex,
+					script_asm = EXCLUDED.script_asm`
+
+				_, err = tx.Exec(query, args...)
+				if err != nil {
+					return fmt.Errorf("failed to bulk store transaction outputs batch %d-%d: %w", i, end, err)
+				}
+			}
+		}
+
+		// Bulk transaction storage completed (metrics collected internally)
+
+		return tx.Commit()
+	}, 3) // Retry up to 3 times
+}
+
+// BatchStoreTransactionsInTx stores multiple transactions with their inputs and outputs within an existing transaction
+func (db *DB) BatchStoreTransactionsInTx(tx *sql.Tx, transactions []*models.Transaction, inputs []*models.TransactionInput, outputs []*models.TransactionOutput) error {
+	if len(transactions) == 0 {
+		return nil
+	}
+
+	// Store transactions using bulk VALUES insert with batching
+	if len(transactions) > 0 {
+		// PostgreSQL has a limit of 65535 parameters, so we need to batch
+		// Each transaction uses 10 parameters, so max batch size is 6553 transactions
+		batchSize := 6000 // Conservative batch size
+
+		for i := 0; i < len(transactions); i += batchSize {
+			end := i + batchSize
+			if end > len(transactions) {
+				end = len(transactions)
+			}
+
+			batch := transactions[i:end]
+			query := `
+				INSERT INTO transaction (txid, block_height, block_hash, block_time, size, weight, fee_sats, is_coinbase, created_at, updated_at)
+				VALUES `
+
+			values := make([]string, len(batch))
+			args := make([]interface{}, 0, len(batch)*10)
+
+			for j, transaction := range batch {
+				values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+					j*10+1, j*10+2, j*10+3, j*10+4, j*10+5, j*10+6, j*10+7, j*10+8, j*10+9, j*10+10)
+
+				args = append(args,
+					transaction.Txid,
+					transaction.BlockHeight,
+					transaction.BlockHash,
+					transaction.BlockTime,
+					transaction.Size,
+					transaction.Weight,
+					transaction.FeeSats,
+					transaction.IsCoinbase,
+					transaction.CreatedAt,
+					transaction.UpdatedAt,
+				)
+			}
+
+			query += strings.Join(values, ", ")
+			query += ` ON CONFLICT (txid) DO NOTHING`
+
+			_, err := tx.Exec(query, args...)
+			if err != nil {
+				return fmt.Errorf("failed to bulk store transactions batch %d-%d: %w", i, end, err)
+			}
 		}
 	}
 
-	// Store inputs
+	// Store inputs using bulk VALUES insert with batching
 	if len(inputs) > 0 {
-		inputStmt := tx.Stmt(db.stmtCache["store_transaction_input"])
-		defer inputStmt.Close()
+		batchSize := 6000 // Conservative batch size
 
-		for _, input := range inputs {
-			_, err := inputStmt.Exec(
-				input.Txid,
-				input.Vout,
-				input.PrevTxid,
-				input.PrevVout,
-				input.ScriptSig,
-				input.Sequence,
-				pq.Array(input.Witness),
-			)
+		for i := 0; i < len(inputs); i += batchSize {
+			end := i + batchSize
+			if end > len(inputs) {
+				end = len(inputs)
+			}
+
+			batch := inputs[i:end]
+			query := `
+				INSERT INTO transaction_input (txid, vout, prev_txid, prev_vout, script_sig, sequence, witness)
+				VALUES `
+
+			values := make([]string, len(batch))
+			args := make([]interface{}, 0, len(batch)*7)
+
+			for j, input := range batch {
+				values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+					j*7+1, j*7+2, j*7+3, j*7+4, j*7+5, j*7+6, j*7+7)
+
+				// Handle witness field - convert nil to empty array for PostgreSQL
+				witness := input.Witness
+				if witness == nil {
+					witness = []string{}
+				}
+
+				args = append(args,
+					input.Txid,
+					input.Vout,
+					input.PrevTxid,
+					input.PrevVout,
+					input.ScriptSig,
+					input.Sequence,
+					pq.Array(witness),
+				)
+			}
+
+			query += strings.Join(values, ", ")
+			query += ` ON CONFLICT (txid, vout) DO NOTHING`
+
+			_, err := tx.Exec(query, args...)
 			if err != nil {
-				return fmt.Errorf("failed to store transaction input %s:%d: %w", input.Txid, input.Vout, err)
+				return fmt.Errorf("failed to bulk store transaction inputs batch %d-%d: %w", i, end, err)
 			}
 		}
 	}
 
-	// Store outputs
+	// Store outputs using bulk VALUES insert with batching
 	if len(outputs) > 0 {
-		outputStmt := tx.Stmt(db.stmtCache["store_transaction_output"])
-		defer outputStmt.Close()
+		batchSize := 6000 // Conservative batch size
 
-		for _, output := range outputs {
-			_, err := outputStmt.Exec(
-				output.Txid,
-				output.Vout,
-				output.Address,
-				output.ValueSats,
-				output.ScriptType,
-				output.ScriptHex,
-				output.ScriptAsm,
-			)
+		for i := 0; i < len(outputs); i += batchSize {
+			end := i + batchSize
+			if end > len(outputs) {
+				end = len(outputs)
+			}
+
+			batch := outputs[i:end]
+			query := `
+				INSERT INTO transaction_output (txid, vout, address, value_sats, script_type, script_hex, script_asm)
+				VALUES `
+
+			values := make([]string, len(batch))
+			args := make([]interface{}, 0, len(batch)*7)
+
+			for j, output := range batch {
+				values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+					j*7+1, j*7+2, j*7+3, j*7+4, j*7+5, j*7+6, j*7+7)
+
+				args = append(args,
+					output.Txid,
+					output.Vout,
+					output.Address,
+					output.ValueSats,
+					output.ScriptType,
+					output.ScriptHex,
+					output.ScriptAsm,
+				)
+			}
+
+			query += strings.Join(values, ", ")
+			query += ` ON CONFLICT (txid, vout) DO NOTHING`
+
+			_, err := tx.Exec(query, args...)
 			if err != nil {
-				return fmt.Errorf("failed to store transaction output %s:%d: %w", output.Txid, output.Vout, err)
+				return fmt.Errorf("failed to bulk store transaction outputs batch %d-%d: %w", i, end, err)
 			}
 		}
 	}
 
-	return tx.Commit()
+	return nil
 }
 
 // BatchUpsertTransactionReferences processes multiple transaction references in a single transaction
@@ -1111,33 +1593,51 @@ func (db *DB) BatchUpsertTransactionReferences(txRefs []*models.TransactionRefer
 		return nil
 	}
 
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	stmt := tx.Stmt(db.stmtCache["upsert_tx_reference"])
-	defer stmt.Close()
-
-	for _, txRef := range txRefs {
-		_, err := stmt.Exec(
-			txRef.Txid,
-			txRef.Address,
-			txRef.Direction,
-			txRef.ValueSats,
-			txRef.SenderAddress,
-			txRef.ReceiverAddress,
-			txRef.BlockHeight,
-			txRef.BlockTimestamp,
-			txRef.CreatedAt,
-		)
+	return executeWithRetry(func() error {
+		tx, err := db.conn.Begin()
 		if err != nil {
-			return fmt.Errorf("failed to upsert transaction reference %s:%s: %w", txRef.Txid, txRef.Address, err)
+			return fmt.Errorf("failed to begin transaction: %w", err)
 		}
+		defer tx.Rollback()
+
+		// Set transaction isolation level to prevent deadlocks
+		_, err = tx.Exec("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+		if err != nil {
+			return fmt.Errorf("failed to set transaction isolation level: %w", err)
+		}
+
+		stmt := tx.Stmt(db.stmtCache["upsert_tx_reference"])
+		defer stmt.Close()
+
+		for _, txRef := range txRefs {
+			_, err := stmt.Exec(
+				txRef.Txid,
+				txRef.Address,
+				txRef.Direction,
+				txRef.ValueSats,
+				txRef.SenderAddress,
+				txRef.ReceiverAddress,
+				txRef.BlockHeight,
+				txRef.BlockTimestamp,
+				txRef.CreatedAt,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to upsert transaction reference %s:%s: %w", txRef.Txid, txRef.Address, err)
+			}
+		}
+
+		return tx.Commit()
+	}, 3) // Retry up to 3 times
+}
+
+// BatchUpsertTransactionReferencesInTx processes multiple transaction references within an existing transaction using bulk operations
+func (db *DB) BatchUpsertTransactionReferencesInTx(tx *sql.Tx, txRefs []*models.TransactionReference) error {
+	if len(txRefs) == 0 {
+		return nil
 	}
 
-	return tx.Commit()
+	// Use the existing bulk operation for maximum performance
+	return db.bulkUpsertTxReferencesInTx(tx, txRefs)
 }
 
 // GetWatchedScriptsMap returns a map of watched scripts for faster lookup
@@ -1153,4 +1653,631 @@ func (db *DB) GetWatchedScriptsMap() (map[string]*models.WatchedScript, error) {
 	}
 
 	return scriptMap, nil
+}
+
+// BatchUpsertUTXOsOptimized processes multiple UTXOs with larger batch sizes
+func (db *DB) BatchUpsertUTXOsOptimized(utxos []*models.UTXO) error {
+	if len(utxos) == 0 {
+		return nil
+	}
+
+	return executeWithRetry(func() error {
+		// Use larger batch sizes for better performance
+		batchSize := 1000 // Increased from individual operations
+
+		for i := 0; i < len(utxos); i += batchSize {
+			end := i + batchSize
+			if end > len(utxos) {
+				end = len(utxos)
+			}
+
+			batch := utxos[i:end]
+			if err := db.batchUpsertUTXOsBatch(batch); err != nil {
+				return fmt.Errorf("failed to upsert UTXO batch %d-%d: %w", i, end, err)
+			}
+		}
+
+		return nil
+	}, 3)
+}
+
+// batchUpsertUTXOsBatch processes a single batch of UTXOs with deadlock prevention
+func (db *DB) batchUpsertUTXOsBatch(utxos []*models.UTXO) error {
+	// Sort UTXOs by (txid, vout) to ensure consistent lock ordering and prevent deadlocks
+	sortedUTXOs := make([]*models.UTXO, len(utxos))
+	copy(sortedUTXOs, utxos)
+	sortUTXOsByTxidVout(sortedUTXOs)
+
+	return executeWithRetry(func() error {
+		tx, err := db.conn.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Set transaction isolation level to prevent deadlocks
+		_, err = tx.Exec("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+		if err != nil {
+			return fmt.Errorf("failed to set transaction isolation level: %w", err)
+		}
+
+		// Use bulk VALUES insert for better performance
+		query := `
+		INSERT INTO utxo (txid, vout, address, script_hex, value_sats, status, block_height, block_hash, first_seen_at)
+		VALUES `
+
+		values := make([]string, len(sortedUTXOs))
+		args := make([]interface{}, 0, len(sortedUTXOs)*9)
+
+		for j, utxo := range sortedUTXOs {
+			values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				j*9+1, j*9+2, j*9+3, j*9+4, j*9+5, j*9+6, j*9+7, j*9+8, j*9+9)
+
+			args = append(args,
+				utxo.Txid,
+				utxo.Vout,
+				utxo.Address,
+				utxo.ScriptHex,
+				utxo.ValueSats,
+				utxo.Status,
+				utxo.BlockHeight,
+				utxo.BlockHash,
+				utxo.FirstSeenAt,
+			)
+		}
+
+		query += strings.Join(values, ", ")
+		query += ` ON CONFLICT (txid, vout) 
+		DO UPDATE SET 
+			status = EXCLUDED.status,
+			block_height = EXCLUDED.block_height,
+			block_hash = EXCLUDED.block_hash`
+
+		_, err = tx.Exec(query, args...)
+		if err != nil {
+			return err
+		}
+
+		return tx.Commit()
+	}, 5) // Retry up to 5 times for deadlock recovery
+}
+
+// ExecuteBulkOperations executes all database operations in a single transaction for maximum performance
+func (db *DB) ExecuteBulkOperations(transactions []*models.Transaction, inputs []*models.TransactionInput, outputs []*models.TransactionOutput, newUTXOs []*models.UTXO, spentUTXOs []*models.UTXO, txReferences []*models.TransactionReference, blockHashes []string, blockHeightMap map[string]int) error {
+	if len(transactions) == 0 && len(newUTXOs) == 0 && len(spentUTXOs) == 0 && len(txReferences) == 0 {
+		return nil
+	}
+
+	startTime := time.Now()
+	log.Printf("🗄️  Starting database bulk operations:")
+	log.Printf("   💳 Transactions: %d", len(transactions))
+	log.Printf("   📥 Inputs: %d", len(inputs))
+	log.Printf("   📤 Outputs: %d", len(outputs))
+	log.Printf("   🆕 New UTXOs: %d", len(newUTXOs))
+	log.Printf("   💸 Spent UTXOs: %d", len(spentUTXOs))
+	log.Printf("   🔗 Transaction References: %d", len(txReferences))
+	log.Printf("   📦 Blocks: %d", len(blockHashes))
+
+	return executeWithRetry(func() error {
+		tx, err := db.conn.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Set transaction isolation level to prevent deadlocks
+		_, err = tx.Exec("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+		if err != nil {
+			return fmt.Errorf("failed to set transaction isolation level: %w", err)
+		}
+
+		// Store transactions in bulk
+		if len(transactions) > 0 {
+			txStart := time.Now()
+			if err := db.bulkStoreTransactionsInTx(tx, transactions); err != nil {
+				return fmt.Errorf("failed to bulk store transactions: %w", err)
+			}
+			txDuration := time.Since(txStart)
+			log.Printf("   ✅ Stored %d transactions in %v (%.2f txs/sec)",
+				len(transactions), txDuration, float64(len(transactions))/txDuration.Seconds())
+		}
+
+		// Store inputs in bulk
+		if len(inputs) > 0 {
+			inputStart := time.Now()
+			if err := db.bulkStoreInputsInTx(tx, inputs); err != nil {
+				return fmt.Errorf("failed to bulk store inputs: %w", err)
+			}
+			inputDuration := time.Since(inputStart)
+			log.Printf("   ✅ Stored %d inputs in %v (%.2f inputs/sec)",
+				len(inputs), inputDuration, float64(len(inputs))/inputDuration.Seconds())
+		}
+
+		// Store outputs in bulk
+		if len(outputs) > 0 {
+			outputStart := time.Now()
+			if err := db.bulkStoreOutputsInTx(tx, outputs); err != nil {
+				return fmt.Errorf("failed to bulk store outputs: %w", err)
+			}
+			outputDuration := time.Since(outputStart)
+			log.Printf("   ✅ Stored %d outputs in %v (%.2f outputs/sec)",
+				len(outputs), outputDuration, float64(len(outputs))/outputDuration.Seconds())
+		}
+
+		// Process new UTXOs in bulk
+		if len(newUTXOs) > 0 {
+			utxoStart := time.Now()
+			if err := db.bulkUpsertUTXOsInTx(tx, newUTXOs); err != nil {
+				return fmt.Errorf("failed to bulk upsert UTXOs: %w", err)
+			}
+			utxoDuration := time.Since(utxoStart)
+			log.Printf("   ✅ Upserted %d new UTXOs in %v (%.2f utxos/sec)",
+				len(newUTXOs), utxoDuration, float64(len(newUTXOs))/utxoDuration.Seconds())
+		}
+
+		// Process spent UTXOs in bulk
+		if len(spentUTXOs) > 0 {
+			spentStart := time.Now()
+			if err := db.bulkMarkUTXOsSpentInTx(tx, spentUTXOs); err != nil {
+				return fmt.Errorf("failed to bulk mark UTXOs as spent: %w", err)
+			}
+			spentDuration := time.Since(spentStart)
+			log.Printf("   ✅ Marked %d UTXOs as spent in %v (%.2f utxos/sec)",
+				len(spentUTXOs), spentDuration, float64(len(spentUTXOs))/spentDuration.Seconds())
+		}
+
+		// Process transaction references in bulk
+		if len(txReferences) > 0 {
+			refStart := time.Now()
+			if err := db.bulkUpsertTxReferencesInTx(tx, txReferences); err != nil {
+				return fmt.Errorf("failed to bulk upsert transaction references: %w", err)
+			}
+			refDuration := time.Since(refStart)
+			log.Printf("   ✅ Upserted %d transaction references in %v (%.2f refs/sec)",
+				len(txReferences), refDuration, float64(len(txReferences))/refDuration.Seconds())
+		}
+
+		// Update index progress for all blocks
+		if len(blockHashes) > 0 {
+			progressStart := time.Now()
+			if err := db.bulkUpdateIndexProgressInTx(tx, blockHashes, blockHeightMap); err != nil {
+				return fmt.Errorf("failed to bulk update index progress: %w", err)
+			}
+			progressDuration := time.Since(progressStart)
+			log.Printf("   ✅ Updated index progress for %d blocks in %v", len(blockHashes), progressDuration)
+		}
+
+		commitStart := time.Now()
+		err = tx.Commit()
+		commitDuration := time.Since(commitStart)
+		totalDuration := time.Since(startTime)
+
+		if err != nil {
+			return fmt.Errorf("failed to commit transaction after %v: %w", totalDuration, err)
+		}
+
+		log.Printf("🗄️  Database bulk operations completed successfully!")
+		log.Printf("   ⏱️  Total database time: %v", totalDuration)
+		log.Printf("   💾 Commit time: %v", commitDuration)
+		log.Printf("   📊 Total records processed: %d", len(transactions)+len(inputs)+len(outputs)+len(newUTXOs)+len(spentUTXOs)+len(txReferences))
+
+		return nil
+	}, 5) // Retry up to 5 times for deadlock recovery
+}
+
+// bulkStoreTransactionsInTx stores transactions in bulk within a transaction
+func (db *DB) bulkStoreTransactionsInTx(tx *sql.Tx, transactions []*models.Transaction) error {
+	if len(transactions) == 0 {
+		return nil
+	}
+
+	// Use larger batch sizes for better performance
+	batchSize := 5000 // Increased batch size
+	totalBatches := (len(transactions) + batchSize - 1) / batchSize
+
+	log.Printf("   💳 Storing %d transactions in %d batches (batch size: %d)", len(transactions), totalBatches, batchSize)
+
+	for i := 0; i < len(transactions); i += batchSize {
+		end := i + batchSize
+		if end > len(transactions) {
+			end = len(transactions)
+		}
+
+		batch := transactions[i:end]
+		batchNum := (i / batchSize) + 1
+
+		query := `
+			INSERT INTO transaction (txid, block_height, block_hash, block_time, size, weight, fee_sats, is_coinbase, created_at, updated_at)
+			VALUES `
+
+		values := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch)*10)
+
+		for j, transaction := range batch {
+			values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				j*10+1, j*10+2, j*10+3, j*10+4, j*10+5, j*10+6, j*10+7, j*10+8, j*10+9, j*10+10)
+
+			args = append(args,
+				transaction.Txid,
+				transaction.BlockHeight,
+				transaction.BlockHash,
+				transaction.BlockTime,
+				transaction.Size,
+				transaction.Weight,
+				transaction.FeeSats,
+				transaction.IsCoinbase,
+				transaction.CreatedAt,
+				time.Now(),
+			)
+		}
+
+		query += strings.Join(values, ", ")
+		query += ` ON CONFLICT (txid) DO UPDATE SET
+			block_height = EXCLUDED.block_height,
+			block_hash = EXCLUDED.block_hash,
+			block_time = EXCLUDED.block_time,
+			size = EXCLUDED.size,
+			weight = EXCLUDED.weight,
+			fee_sats = EXCLUDED.fee_sats,
+			is_coinbase = EXCLUDED.is_coinbase,
+			updated_at = EXCLUDED.updated_at`
+
+		_, err := tx.Exec(query, args...)
+		if err != nil {
+			return fmt.Errorf("failed to bulk store transactions batch %d-%d: %w", i, end, err)
+		}
+
+		if batchNum%5 == 0 || batchNum == totalBatches {
+			log.Printf("   💳 Transaction batch %d/%d completed (%d transactions)", batchNum, totalBatches, len(batch))
+		}
+	}
+
+	return nil
+}
+
+// bulkStoreInputsInTx stores transaction inputs in bulk within a transaction
+func (db *DB) bulkStoreInputsInTx(tx *sql.Tx, inputs []*models.TransactionInput) error {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	batchSize := 8000 // Large batch size for inputs
+
+	for i := 0; i < len(inputs); i += batchSize {
+		end := i + batchSize
+		if end > len(inputs) {
+			end = len(inputs)
+		}
+
+		batch := inputs[i:end]
+		query := `
+			INSERT INTO transaction_input (txid, vout, prev_txid, prev_vout, script_sig, sequence, witness)
+			VALUES `
+
+		values := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch)*7)
+
+		for j, input := range batch {
+			values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				j*7+1, j*7+2, j*7+3, j*7+4, j*7+5, j*7+6, j*7+7)
+
+			// Handle witness field - convert nil to empty array for PostgreSQL
+			witness := input.Witness
+			if witness == nil {
+				witness = []string{}
+			}
+
+			args = append(args,
+				input.Txid,
+				input.Vout,
+				input.PrevTxid,
+				input.PrevVout,
+				input.ScriptSig,
+				input.Sequence,
+				pq.Array(witness),
+			)
+		}
+
+		query += strings.Join(values, ", ")
+		query += ` ON CONFLICT (txid, vout) DO UPDATE SET
+			prev_txid = EXCLUDED.prev_txid,
+			prev_vout = EXCLUDED.prev_vout,
+			script_sig = EXCLUDED.script_sig,
+			sequence = EXCLUDED.sequence,
+			witness = EXCLUDED.witness`
+
+		_, err := tx.Exec(query, args...)
+		if err != nil {
+			return fmt.Errorf("failed to bulk store transaction inputs batch %d-%d: %w", i, end, err)
+		}
+	}
+
+	return nil
+}
+
+// bulkStoreOutputsInTx stores transaction outputs in bulk within a transaction
+func (db *DB) bulkStoreOutputsInTx(tx *sql.Tx, outputs []*models.TransactionOutput) error {
+	if len(outputs) == 0 {
+		return nil
+	}
+
+	batchSize := 8000 // Large batch size for outputs
+
+	for i := 0; i < len(outputs); i += batchSize {
+		end := i + batchSize
+		if end > len(outputs) {
+			end = len(outputs)
+		}
+
+		batch := outputs[i:end]
+		query := `
+			INSERT INTO transaction_output (txid, vout, address, value_sats, script_type, script_hex, script_asm)
+			VALUES `
+
+		values := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch)*7)
+
+		for j, output := range batch {
+			values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				j*7+1, j*7+2, j*7+3, j*7+4, j*7+5, j*7+6, j*7+7)
+
+			args = append(args,
+				output.Txid,
+				output.Vout,
+				output.Address,
+				output.ValueSats,
+				output.ScriptType,
+				output.ScriptHex,
+				output.ScriptAsm,
+			)
+		}
+
+		query += strings.Join(values, ", ")
+		query += ` ON CONFLICT (txid, vout) DO UPDATE SET
+			address = EXCLUDED.address,
+			value_sats = EXCLUDED.value_sats,
+			script_type = EXCLUDED.script_type,
+			script_hex = EXCLUDED.script_hex,
+			script_asm = EXCLUDED.script_asm`
+
+		_, err := tx.Exec(query, args...)
+		if err != nil {
+			return fmt.Errorf("failed to bulk store transaction outputs batch %d-%d: %w", i, end, err)
+		}
+	}
+
+	return nil
+}
+
+// bulkUpsertUTXOsInTx processes multiple UTXOs in bulk within a transaction
+func (db *DB) bulkUpsertUTXOsInTx(tx *sql.Tx, utxos []*models.UTXO) error {
+	if len(utxos) == 0 {
+		return nil
+	}
+
+	// Sort UTXOs by (txid, vout) to ensure consistent lock ordering and prevent deadlocks
+	sortedUTXOs := make([]*models.UTXO, len(utxos))
+	copy(sortedUTXOs, utxos)
+	sortUTXOsByTxidVout(sortedUTXOs)
+
+	batchSize := 5000 // Large batch size for UTXOs
+	totalBatches := (len(sortedUTXOs) + batchSize - 1) / batchSize
+
+	log.Printf("   🆕 Upserting %d new UTXOs in %d batches (batch size: %d)", len(sortedUTXOs), totalBatches, batchSize)
+
+	for i := 0; i < len(sortedUTXOs); i += batchSize {
+		end := i + batchSize
+		if end > len(sortedUTXOs) {
+			end = len(sortedUTXOs)
+		}
+
+		batch := sortedUTXOs[i:end]
+		batchNum := (i / batchSize) + 1
+
+		query := `
+		INSERT INTO utxo (txid, vout, address, script_hex, value_sats, status, block_height, block_hash, first_seen_at)
+		VALUES `
+
+		values := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch)*9)
+
+		for j, utxo := range batch {
+			values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				j*9+1, j*9+2, j*9+3, j*9+4, j*9+5, j*9+6, j*9+7, j*9+8, j*9+9)
+
+			args = append(args,
+				utxo.Txid,
+				utxo.Vout,
+				utxo.Address,
+				utxo.ScriptHex,
+				utxo.ValueSats,
+				utxo.Status,
+				utxo.BlockHeight,
+				utxo.BlockHash,
+				utxo.FirstSeenAt,
+			)
+		}
+
+		query += strings.Join(values, ", ")
+		query += ` ON CONFLICT (txid, vout) 
+		DO UPDATE SET 
+			status = EXCLUDED.status,
+			block_height = EXCLUDED.block_height,
+			block_hash = EXCLUDED.block_hash`
+
+		_, err := tx.Exec(query, args...)
+		if err != nil {
+			return fmt.Errorf("failed to bulk upsert UTXOs batch %d-%d: %w", i, end, err)
+		}
+
+		if batchNum%5 == 0 || batchNum == totalBatches {
+			log.Printf("   🆕 UTXO batch %d/%d completed (%d UTXOs)", batchNum, totalBatches, len(batch))
+		}
+	}
+
+	return nil
+}
+
+// bulkMarkUTXOsSpentInTx marks multiple UTXOs as spent in bulk within a transaction
+func (db *DB) bulkMarkUTXOsSpentInTx(tx *sql.Tx, spentUTXOs []*models.UTXO) error {
+	if len(spentUTXOs) == 0 {
+		return nil
+	}
+
+	// Sort UTXOs by (txid, vout) to ensure consistent lock ordering and prevent deadlocks
+	sortedUTXOs := make([]*models.UTXO, len(spentUTXOs))
+	copy(sortedUTXOs, spentUTXOs)
+	sortUTXOsByTxidVout(sortedUTXOs)
+
+	// Use the most efficient approach: single UPDATE with IN clause
+	// This leverages the primary key index (txid, vout) for maximum performance
+	batchSize := 1000 // Process in batches to avoid parameter limits
+
+	for i := 0; i < len(sortedUTXOs); i += batchSize {
+		end := i + batchSize
+		if end > len(sortedUTXOs) {
+			end = len(sortedUTXOs)
+		}
+
+		batch := sortedUTXOs[i:end]
+
+		// Build the IN clause for the batch
+		placeholders := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch)*2+2)
+
+		for j, utxo := range batch {
+			placeholders[j] = fmt.Sprintf("($%d, $%d)", j*2+1, j*2+2)
+			args = append(args, utxo.Txid, utxo.Vout)
+		}
+
+		// Add the spent_at and spent_by_txid parameters (use the first UTXO's values as they should be the same)
+		args = append(args, batch[0].SpentAt, batch[0].SpentByTxid)
+
+		query := fmt.Sprintf(`
+			UPDATE utxo 
+			SET status = 'spent', spent_at = $%d, spent_by_txid = $%d
+			WHERE (txid, vout) IN (%s)`,
+			len(args)-1, len(args), strings.Join(placeholders, ", "))
+
+		_, err := tx.Exec(query, args...)
+		if err != nil {
+			return fmt.Errorf("failed to bulk mark UTXOs as spent batch %d-%d: %w", i, end, err)
+		}
+	}
+
+	return nil
+}
+
+// BatchUpsertUTXOsInTx processes multiple UTXOs within an existing transaction using bulk operations
+func (db *DB) BatchUpsertUTXOsInTx(tx *sql.Tx, utxos []*models.UTXO) error {
+	if len(utxos) == 0 {
+		return nil
+	}
+
+	// Use the existing bulk operation for maximum performance
+	return db.bulkUpsertUTXOsInTx(tx, utxos)
+}
+
+// BatchMarkUTXOsSpentInTx marks multiple UTXOs as spent within an existing transaction using bulk operations
+func (db *DB) BatchMarkUTXOsSpentInTx(tx *sql.Tx, spentUTXOs []*models.UTXO) error {
+	if len(spentUTXOs) == 0 {
+		return nil
+	}
+
+	// Use the existing bulk operation for maximum performance
+	return db.bulkMarkUTXOsSpentInTx(tx, spentUTXOs)
+}
+
+// bulkUpsertTxReferencesInTx processes multiple transaction references in bulk within a transaction
+func (db *DB) bulkUpsertTxReferencesInTx(tx *sql.Tx, txRefs []*models.TransactionReference) error {
+	if len(txRefs) == 0 {
+		return nil
+	}
+
+	batchSize := 5000 // Large batch size for transaction references
+
+	for i := 0; i < len(txRefs); i += batchSize {
+		end := i + batchSize
+		if end > len(txRefs) {
+			end = len(txRefs)
+		}
+
+		batch := txRefs[i:end]
+		query := `
+			INSERT INTO tx_reference (txid, address, direction, value_sats, sender_address, receiver_address, block_height, block_timestamp, created_at)
+			VALUES `
+
+		values := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch)*9)
+
+		for j, txRef := range batch {
+			values[j] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				j*9+1, j*9+2, j*9+3, j*9+4, j*9+5, j*9+6, j*9+7, j*9+8, j*9+9)
+
+			args = append(args,
+				txRef.Txid,
+				txRef.Address,
+				txRef.Direction,
+				txRef.ValueSats,
+				txRef.SenderAddress,
+				txRef.ReceiverAddress,
+				txRef.BlockHeight,
+				txRef.BlockTimestamp,
+				txRef.CreatedAt,
+			)
+		}
+
+		query += strings.Join(values, ", ")
+		query += ` ON CONFLICT (txid, address, direction) 
+		DO UPDATE SET 
+			value_sats = EXCLUDED.value_sats,
+			sender_address = EXCLUDED.sender_address,
+			receiver_address = EXCLUDED.receiver_address,
+			block_height = EXCLUDED.block_height,
+			block_timestamp = EXCLUDED.block_timestamp`
+
+		_, err := tx.Exec(query, args...)
+		if err != nil {
+			return fmt.Errorf("failed to bulk upsert transaction references batch %d-%d: %w", i, end, err)
+		}
+	}
+
+	return nil
+}
+
+// bulkUpdateIndexProgressInTx updates index progress for multiple blocks in bulk within a transaction
+func (db *DB) bulkUpdateIndexProgressInTx(tx *sql.Tx, blockHashes []string, blockHeightMap map[string]int) error {
+	if len(blockHashes) == 0 {
+		return nil
+	}
+
+	// Find the highest block height to update progress to
+	var maxHeight int
+	var latestBlockHash string
+
+	for _, blockHash := range blockHashes {
+		height := blockHeightMap[blockHash]
+		if height > maxHeight {
+			maxHeight = height
+			latestBlockHash = blockHash
+		}
+	}
+
+	// Update index progress to the latest block
+	query := `
+		INSERT INTO index_progress (id, last_height, last_block_hash, updated_at)
+		VALUES (true, $1, $2, $3)
+		ON CONFLICT (id) 
+		DO UPDATE SET 
+			last_height = EXCLUDED.last_height,
+			last_block_hash = EXCLUDED.last_block_hash,
+			updated_at = EXCLUDED.updated_at
+	`
+
+	_, err := tx.Exec(query, maxHeight, latestBlockHash, time.Now())
+	if err != nil {
+		return fmt.Errorf("failed to bulk update index progress: %w", err)
+	}
+
+	return nil
 }
