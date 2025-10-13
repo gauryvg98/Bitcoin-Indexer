@@ -150,7 +150,7 @@ func NewIndexer(rpcClient *bitcoin.RPCClient, db *database.DB, config *Config) *
 	// Create worker pool configuration
 	workerConfig := workers.WorkerConfig{
 		RPCWorkers:    10,   // 10 RPC workers for fetching blocks
-		DBWorkers:     10,   // 10 DB workers for processing blocks
+		DBWorkers:     20,   // 10 DB workers for processing blocks
 		QueueSize:     1000, // Queue size for work items
 		WorkerTimeout: 30 * time.Second,
 	}

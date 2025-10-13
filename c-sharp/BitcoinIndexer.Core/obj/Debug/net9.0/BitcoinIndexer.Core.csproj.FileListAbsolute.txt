@@ -1,0 +1,12 @@
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/bin/Debug/net9.0/BitcoinIndexer.Core.deps.json
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/bin/Debug/net9.0/BitcoinIndexer.Core.dll
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/bin/Debug/net9.0/BitcoinIndexer.Core.pdb
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/obj/Debug/net9.0/BitcoinIndexer.Core.GeneratedMSBuildEditorConfig.editorconfig
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/obj/Debug/net9.0/BitcoinIndexer.Core.AssemblyInfoInputs.cache
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/obj/Debug/net9.0/BitcoinIndexer.Core.AssemblyInfo.cs
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/obj/Debug/net9.0/BitcoinIndexer.Core.csproj.CoreCompileInputs.cache
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/obj/Debug/net9.0/BitcoinIndexer.Core.sourcelink.json
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/obj/Debug/net9.0/BitcoinIndexer.Core.dll
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/obj/Debug/net9.0/refint/BitcoinIndexer.Core.dll
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/obj/Debug/net9.0/BitcoinIndexer.Core.pdb
+/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/obj/Debug/net9.0/ref/BitcoinIndexer.Core.dll

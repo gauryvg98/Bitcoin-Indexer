@@ -1,0 +1,245 @@
+{
+  "format": 1,
+  "restore": {
+    "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Application/BitcoinIndexer.Application.csproj": {}
+  },
+  "projects": {
+    "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Application/BitcoinIndexer.Application.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Application/BitcoinIndexer.Application.csproj",
+        "projectName": "BitcoinIndexer.Application",
+        "projectPath": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Application/BitcoinIndexer.Application.csproj",
+        "packagesPath": "/Users/yashvardhangaur/.nuget/packages/",
+        "outputPath": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Application/obj/",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "/Users/yashvardhangaur/.nuget/NuGet/NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net9.0"
+        ],
+        "sources": {
+          "/opt/homebrew/Cellar/dotnet/9.0.8/libexec/library-packs": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net9.0": {
+            "targetAlias": "net9.0",
+            "projectReferences": {
+              "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/BitcoinIndexer.Core.csproj": {
+                "projectPath": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/BitcoinIndexer.Core.csproj"
+              },
+              "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Infrastructure/BitcoinIndexer.Infrastructure.csproj": {
+                "projectPath": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Infrastructure/BitcoinIndexer.Infrastructure.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.100"
+      },
+      "frameworks": {
+        "net9.0": {
+          "targetAlias": "net9.0",
+          "dependencies": {
+            "Microsoft.Extensions.Hosting": {
+              "target": "Package",
+              "version": "[9.0.9, )"
+            },
+            "Microsoft.Extensions.Logging": {
+              "target": "Package",
+              "version": "[9.0.9, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "/opt/homebrew/Cellar/dotnet/9.0.8/libexec/sdk/9.0.109/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/BitcoinIndexer.Core.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/BitcoinIndexer.Core.csproj",
+        "projectName": "BitcoinIndexer.Core",
+        "projectPath": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/BitcoinIndexer.Core.csproj",
+        "packagesPath": "/Users/yashvardhangaur/.nuget/packages/",
+        "outputPath": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/obj/",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "/Users/yashvardhangaur/.nuget/NuGet/NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net9.0"
+        ],
+        "sources": {
+          "/opt/homebrew/Cellar/dotnet/9.0.8/libexec/library-packs": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net9.0": {
+            "targetAlias": "net9.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.100"
+      },
+      "frameworks": {
+        "net9.0": {
+          "targetAlias": "net9.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "/opt/homebrew/Cellar/dotnet/9.0.8/libexec/sdk/9.0.109/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Infrastructure/BitcoinIndexer.Infrastructure.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Infrastructure/BitcoinIndexer.Infrastructure.csproj",
+        "projectName": "BitcoinIndexer.Infrastructure",
+        "projectPath": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Infrastructure/BitcoinIndexer.Infrastructure.csproj",
+        "packagesPath": "/Users/yashvardhangaur/.nuget/packages/",
+        "outputPath": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Infrastructure/obj/",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "/Users/yashvardhangaur/.nuget/NuGet/NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net9.0"
+        ],
+        "sources": {
+          "/opt/homebrew/Cellar/dotnet/9.0.8/libexec/library-packs": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net9.0": {
+            "targetAlias": "net9.0",
+            "projectReferences": {
+              "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/BitcoinIndexer.Core.csproj": {
+                "projectPath": "/Users/yashvardhangaur/Desktop/tria-finance/code/bitcoin-indexer-poc/c-sharp/BitcoinIndexer.Core/BitcoinIndexer.Core.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.100"
+      },
+      "frameworks": {
+        "net9.0": {
+          "targetAlias": "net9.0",
+          "dependencies": {
+            "Microsoft.EntityFrameworkCore": {
+              "target": "Package",
+              "version": "[9.0.9, )"
+            },
+            "Microsoft.EntityFrameworkCore.Design": {
+              "include": "Runtime, Build, Native, ContentFiles, Analyzers, BuildTransitive",
+              "suppressParent": "All",
+              "target": "Package",
+              "version": "[9.0.9, )"
+            },
+            "Microsoft.Extensions.Configuration": {
+              "target": "Package",
+              "version": "[9.0.9, )"
+            },
+            "Microsoft.Extensions.Configuration.Binder": {
+              "target": "Package",
+              "version": "[9.0.9, )"
+            },
+            "Microsoft.Extensions.Http": {
+              "target": "Package",
+              "version": "[9.0.9, )"
+            },
+            "Microsoft.Extensions.Options": {
+              "target": "Package",
+              "version": "[9.0.9, )"
+            },
+            "NBitcoin": {
+              "target": "Package",
+              "version": "[9.0.1, )"
+            },
+            "Npgsql.EntityFrameworkCore.PostgreSQL": {
+              "target": "Package",
+              "version": "[9.0.4, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "/opt/homebrew/Cellar/dotnet/9.0.8/libexec/sdk/9.0.109/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

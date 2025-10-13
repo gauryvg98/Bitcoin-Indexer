@@ -1,0 +1,6 @@
+@BitcoinIndexer.Api_HostAddress = http://localhost:5095
+
+GET {{BitcoinIndexer.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

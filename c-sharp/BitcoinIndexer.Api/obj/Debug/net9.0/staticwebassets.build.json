@@ -1,0 +1,12 @@
+{
+  "Version": 1,
+  "Hash": "Kiqj8S6/YMXAuCUivW+g/UJ3eZDHNZOS1DkS3SrKWDA=",
+  "Source": "BitcoinIndexer.Api",
+  "BasePath": "_content/BitcoinIndexer.Api",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": [],
+  "Endpoints": []
+}

@@ -1,0 +1,40 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BitcoinIndexer.Api", "BitcoinIndexer.Api\BitcoinIndexer.Api.csproj", "{D92E1EF7-A8B3-476E-A569-93D9AE2B8AF6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BitcoinIndexer.Core", "BitcoinIndexer.Core\BitcoinIndexer.Core.csproj", "{13A8A0A9-AFC7-4CEA-AB94-1E62B0133E8F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BitcoinIndexer.Infrastructure", "BitcoinIndexer.Infrastructure\BitcoinIndexer.Infrastructure.csproj", "{D9BAC2A2-EC8E-4338-A8DD-46A531B34253}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BitcoinIndexer.Application", "BitcoinIndexer.Application\BitcoinIndexer.Application.csproj", "{087F94C8-EEF2-4A00-AC5C-75A7BC08A237}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D92E1EF7-A8B3-476E-A569-93D9AE2B8AF6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D92E1EF7-A8B3-476E-A569-93D9AE2B8AF6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D92E1EF7-A8B3-476E-A569-93D9AE2B8AF6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D92E1EF7-A8B3-476E-A569-93D9AE2B8AF6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{13A8A0A9-AFC7-4CEA-AB94-1E62B0133E8F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{13A8A0A9-AFC7-4CEA-AB94-1E62B0133E8F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{13A8A0A9-AFC7-4CEA-AB94-1E62B0133E8F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{13A8A0A9-AFC7-4CEA-AB94-1E62B0133E8F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D9BAC2A2-EC8E-4338-A8DD-46A531B34253}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D9BAC2A2-EC8E-4338-A8DD-46A531B34253}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D9BAC2A2-EC8E-4338-A8DD-46A531B34253}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D9BAC2A2-EC8E-4338-A8DD-46A531B34253}.Release|Any CPU.Build.0 = Release|Any CPU
+		{087F94C8-EEF2-4A00-AC5C-75A7BC08A237}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{087F94C8-EEF2-4A00-AC5C-75A7BC08A237}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{087F94C8-EEF2-4A00-AC5C-75A7BC08A237}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{087F94C8-EEF2-4A00-AC5C-75A7BC08A237}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

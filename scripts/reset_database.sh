@@ -6,8 +6,8 @@
 set -e
 
 # Load configuration
-if [ -f "config.env" ]; then
-    source config.env
+if [ -f ".env" ]; then
+    source .env
 elif [ -f "config.env.example" ]; then
     echo "⚠️  Using config.env.example as template"
     source config.env.example

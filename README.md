@@ -1,6 +1,15 @@
 # Bitcoin Indexer
 
-A high-performance Bitcoin blockchain indexer written in Go that tracks wallet balances, transactions, and UTXO states in real-time. Built for scalability with parallel block processing and comprehensive transaction analysis.
+A high-performance Bitcoin blockchain indexer with implementations in both **Go** and **C#** that tracks wallet balances, transactions, and UTXO states in real-time. Built for scalability with parallel block processing and comprehensive transaction analysis.
+
+## 📋 Implementations
+
+This repository contains two equivalent implementations:
+
+- **Go Implementation** (`/`): High-performance Go-based indexer with worker pools and batch processing
+- **C# Implementation** (`/c-sharp/`): .NET 9 based indexer with Entity Framework Core and RESTful APIs
+
+Both implementations are functionally equivalent and provide the same features. See [IMPLEMENTATION_COMPARISON.md](IMPLEMENTATION_COMPARISON.md) for detailed comparison.
 
 [![License](https://img.shields.io/badge/License-Unlicense-blue.svg)](https://unlicense.org/)
 [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev/)
@@ -94,7 +103,7 @@ A high-performance Bitcoin blockchain indexer written in Go that tracks wallet b
 - **PostgreSQL 13+**: [Download PostgreSQL](https://www.postgresql.org/download/)
 - **Bitcoin Core**: Running node with RPC enabled and `txindex=1`
 
-### Quick Start
+### Go Implementation Quick Start
 
 1. **Clone the repository**
 ```bash
@@ -140,6 +149,38 @@ go build -o bitcoin-indexer ./cmd/indexer
 ```bash
 ./bitcoin-indexer
 ```
+
+### C# Implementation Quick Start
+
+1. **Navigate to C# directory**
+```bash
+cd c-sharp
+```
+
+2. **Prerequisites**
+- .NET 9 SDK: [Download .NET](https://dotnet.microsoft.com/download)
+- PostgreSQL 13+: [Download PostgreSQL](https://www.postgresql.org/download/)
+- Bitcoin Core: Running node with RPC enabled and `txindex=1`
+
+3. **Configure environment**
+```bash
+cp config.env.example config.env
+# Edit config.env with your settings
+```
+
+4. **Run database migrations**
+```bash
+dotnet ef database update --project BitcoinIndexer.Infrastructure --startup-project BitcoinIndexer.Api
+```
+
+5. **Start the application**
+```bash
+dotnet run --project BitcoinIndexer.Api
+```
+
+The C# indexer will automatically start processing blocks and provide a RESTful API at `http://localhost:5095`.
+
+For detailed C# documentation, see [c-sharp/README.md](c-sharp/README.md).
 
 ## ⚙️ Configuration
 
